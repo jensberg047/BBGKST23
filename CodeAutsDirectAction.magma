@@ -1,0 +1,260 @@
+/* ************************************************************************* */
+/* ************************************************************************* */
+/* ************************************************************************* */
+// This file contains functions to determine properties of code-lattices L
+// constructed from binary even self-dual linear codes C of length N. 
+// This file uses the approach detailed in Section 3 of the paper 
+// which views the automorphisms of C as acting directly on the elements of the 
+// code-lattice L. This has the benefit of not needing to construct Aut(L) 
+// explicitly, which becomes computationally expensive as N increases.
+/* ************************************************************************* */
+/* ************************************************************************* */
+/* ************************************************************************* */
+
+
+/* *********************************************** */
+/* *********************************************** */
+// SECTION 1: Jacobi theta and related functions
+/* *********************************************** */
+/* *********************************************** */
+
+CC<I> := ComplexField(10);
+R<z> := PowerSeriesRing(CC: Precision := 15);
+fun<q> := DedekindEta(z);
+
+theta3 := function(qtoapower);
+n := Degree(qtoapower);
+return DedekindEta(q^(n))^5/(DedekindEta(q^(n/2))^2*DedekindEta(q^(2*n))^2);
+end function;
+
+theta2 := function(qtoapower);
+n := Degree(qtoapower);
+return 2*(DedekindEta(q^(2*n)))^2/DedekindEta(q^n);
+end function;
+
+theta4 := function(qtoapower);
+n := Degree(qtoapower);
+return (DedekindEta(q^(n/2)))^2/DedekindEta(q^(n));
+end function;
+
+rho0 := function(qtoapower);
+n := Degree(qtoapower);
+return theta2(q^(n/4))*(1/2);
+end function;
+
+rho1 := function(qtoapower);
+n := Degree(qtoapower);
+return (theta2(q^(n/2))*theta4(q^n))/(2*rho0(q^n));
+end function;
+
+
+/* *********************************************** */
+/* *********************************************** */
+//SECTION 2: General helper functions for finding 
+//theta functions 
+/* *********************************************** */
+/* *********************************************** */
+
+
+/* ********************************************************************** */
+// This function initializes the automorphism group of the code and 
+// returns Aut(G), the list of codewords, and the length of the code
+/* ********************************************************************** */
+
+initializeAutGrp := function(code);
+G, pow, map:= AutomorphismGroup(code);
+codewords := [c: c in code]; //list all the codewords
+N:= Length(code);
+return G, codewords, map, N;
+end function;
+
+
+/* ********************************************************************** */
+// This function turns a binary codeword into the indexed subset of {1,..,N} 
+// whose elements indicate the presence of a 1 in the corresponding index
+// e.g. [1,0,0,1,1,0,0,1] becomes {@ 1,4,5,8 @}
+/* ********************************************************************** */
+CodeWordToSet := function(codeword);
+codeword:= Eltseq(codeword);
+set_from_word := {@ @};
+for i in [1..#codeword] do
+    if codeword[i] eq 1 then
+        Include(~set_from_word, i);
+    end if;
+end for;
+return set_from_word;
+end function;
+
+
+/* *********************************************** */
+/* *********************************************** */
+//SECTION 3: Creating eta products and theta functions 
+// for even unimodular lattices.
+// These lattices are built from doubly even self dual codes
+// Now there's a function that can handle "super codes" 
+//(codes with minimum weight >4) such as the Golay Code
+/* *********************************************** */
+/* *********************************************** */
+
+
+OrbitType := function(codesubgrp);
+    orbits := Orbits(codesubgrp);
+    lengths := Sort([#o: o in orbits]);
+    mults := [Multiplicity(lengths,len): len in lengths]; 
+    inds := SetToSequence({Index(lengths, len): len in lengths});
+    sigma := [<lengths[i],mults[i]>: i in inds];
+    return sigma;
+end function;
+
+EtaProd := function(orbitstructure);
+    etaprod := [];
+    for j in [1..#orbitstructure] do
+        Append(~etaprod, DedekindEta(z^orbitstructure[j][1])^orbitstructure[j][2]);
+    end for;
+    return &*etaprod;
+end function;
+
+
+FindTypes := function(orbits, setX)
+    types := [];
+    for set in orbits do
+        if (set subset setX) and IsEven(#set) then
+            Append(~types,1);
+        elif (set subset setX) and IsOdd(#set) then
+            Append(~types, 2);
+        elif not(set subset setX) and IsEven(#set) then
+            Append(~types, 3);
+        else
+            Append(~types, 4);
+        end if;
+    end for;
+    return types;
+end function;
+
+
+L0ComponentforX := function(orbits, types);
+    thetaforX := []; //create an empty multiset to store information about the corresponding theta function
+
+    if (4 in types) and not(2 in types) then
+        type4s_term1 := [ ];
+        type4s_term2 := [ ];
+        for i in [1..#orbits] do 
+            len := #orbits[i];
+            if types[i] eq 1 then
+                Append(~thetaforX, theta2(q^(2*len)));
+            elif types[i] eq 3 then
+                Append(~thetaforX, theta3(q^(2*len)) );
+            elif types[i] eq 4 then
+                Append(~type4s_term1, theta3(q^(2*len)) );
+                Append(~type4s_term2, theta4(q^(2*len)) );
+            end if;
+        end for;
+        Append(~thetaforX, &*[term: term in type4s_term1] + &*[term: term in type4s_term2]);
+
+    else
+        for i in [1..#orbits] do
+            len := #orbits[i];
+            if types[i] in {1,2} then
+                Append(~thetaforX, theta2(q^(2*len)));
+            elif types[i] in {3,4} then
+                Append(~thetaforX, theta3(q^(2*len)));
+            end if;
+        end for;
+    end if;
+
+    prod := &*[elt: elt in thetaforX];
+    if (4 in types) or (2 in types) then
+        prod := 1/2*prod;
+    end if;
+    return prod;
+end function;
+
+
+L1Components := function(orbits, codewords);
+    X := codewords[1];
+    types := FindTypes(orbits, X);
+    thetaforX := [];
+    type2part := [];
+    type4part := [];
+    for i in [1..#orbits] do
+        len := #orbits[i];
+        if types[i] in {1,3} then
+            Append(~thetaforX, rho0(q^(2*len)));
+        elif types[i] in {2,4} then
+            Append(~type2part, rho0(q^(2*len)));
+            Append(~type4part, rho1(q^(2*len)));
+        end if;
+    end for;
+    Append(~thetaforX, &*[elt: elt in type2part] - &*[elt: elt in type4part]);
+    return 1/2*&*[fxn: fxn in thetaforX];
+end function;
+
+ThetaFunction := function(G, codewords, map, N, sbgrp_gens: IsSuper := false);
+//First, calculate the codewords that are fixed by the subgroup
+    FixedWordsForGenerators := [* *]; //create an empty list that will hold the codewords fixed by each generator
+    for g in sbgrp_gens do
+            SetOfFixedWords := {codewords|}; //this specifies the universe of the set
+            for c in codewords do //for each codeword in the code
+                if map(g)(c) eq c then //if its fixed by a generator
+                    Include(~SetOfFixedWords, c); //add it to the set of fixed words
+                end if;
+            end for;
+            Append(~FixedWordsForGenerators, SetOfFixedWords);
+        end for;
+    //Since we want the codewords that are fixed by every generator, we should take
+    //the intersection of the codewords fixed by each generator
+    listofcodewords := &meet[FixedWordsForGenerators[j]: j in [1..#FixedWordsForGenerators]];
+    ListOfSets := [CodeWordToSet(c): c in listofcodewords]; //turn each codeword into a subset X of {1,...N}
+    orbits := [SetToSequence(Orbits(sub<G|sbgrp_gens>)[i]): i in [1..#Orbits(sub<G|sbgrp_gens>)]];
+
+    thetaforsubgroup :=[* *]; //create an empty multiset
+    if IsSuper eq false then
+        for i in [1..#ListOfSets] do //for each codeword X
+        X := ListOfSets[i];
+        thetaforX := []; //create an empty multiset to store information about the corresponding theta function
+        for set in orbits do //for each of the collections of equal coefficients x_i
+            len := #set; //store the number of equal coefficients
+            //check for type I/II or type III/IV (i.e. subset of X or the complement)
+            //depending on which case, include the appropriate term of the theta series as an entry in the multiset
+            if set subset X then 
+                Append(~thetaforX,theta2(q^(2*len)));
+            else
+                 Append(~thetaforX,theta3(q^(2*len)));
+            end if;
+        end for;
+    
+    Append(~thetaforsubgroup, &*[fxn: fxn in thetaforX]);
+    end for;
+
+    else
+        if &or[IsOdd(#set) : set in orbits] then
+        Append(~thetaforsubgroup, #listofcodewords*L1Components(orbits, ListOfSets));
+        end if;
+
+        for X in ListOfSets do //for each codeword X
+            types := FindTypes(orbits, X);
+            thetaforX_L0 := L0ComponentforX(orbits,types);
+            Append(~thetaforsubgroup, thetaforX_L0);
+        end for;
+    end if;
+    
+    return &+[fxn: fxn in thetaforsubgroup];
+end function;
+
+/* *********************************************** */
+/* *********************************************** */
+// SECTION 4: An example of how to run the code
+/* *********************************************** */
+/* *********************************************** */
+
+C := GolayCode(GF(2),true); 
+G, codewords, map, N := initializeAutGrp(C);
+g := Random(G);
+
+time if MinimumWeight(C) gt 4 then
+    etaquo := ThetaFunction(G, codewords, map, N, [g]: IsSuper := true)/EtaProd(OrbitType(sub<G|g>));
+else
+    etaquo := ThetaFunction(G, codewords,map,N,[g])/EtaProd(OrbitType(sub<G|g>));
+end if;
+OrbitType(sub<G|g>);
+etaquo;
