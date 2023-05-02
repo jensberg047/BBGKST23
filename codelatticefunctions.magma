@@ -1,0 +1,396 @@
+/* ************************************************************************* */
+/* ************************************************************************* */
+/* ************************************************************************* */
+// This file contains functions to determine properties of code-lattices L
+// constructed from binary even self-dual linear codes C of length N. 
+// In particular, this file assumes the automorphism group of C is
+// embedded into Aut(L) via the action of the symmetric group S_N on the 
+// standard basis vectors in R^N.
+//
+// WARNING: the computation of Aut(L) in this manner becomes increasingly 
+// expensive as the size of N increases. See the file "CodeAutsDirectAction" 
+// for an alternative approach detailed in Section 3 of the paper.
+/* ************************************************************************* */
+/* ************************************************************************* */
+/* ************************************************************************* */
+
+//Initialize the Dedekind eta function
+CC<I> := ComplexField(15); //user can change precision
+R<z> := PowerSeriesRing(CC: Precision := 25); //user can change precision
+fun<q> := DedekindEta(z);
+
+
+//This function creates the automorphism group of a binary linear code C
+//It also returns the length N of the code
+AutCode := function(C);
+    G, pow, map:= AutomorphismGroup(C);
+    N:= Length(C);
+    return G, N, map;
+end function;
+
+// This function creates the code lattice L associated to the binary linear code C
+// It also finds the automorphism group of the L with the parameter NaturalAction 
+// set to true.
+// This is what makes Aut(L) contain permutation matrices, i.e., what allows us to 
+// construct an embedding of Aut(C) into Aut(L)
+CodeLattice := function(C);
+    L := Lattice(C,"A"); 
+    time AutLNat := AutomorphismGroup(L: NaturalAction := true); 
+    _<x> := Parent(CharacteristicPolynomial(AutLNat.1));
+return L, AutLNat, Parent(x);
+end function;
+
+//This function takes in an automorphism g of the lattice L
+//it returns the lattice fixed by the automorphism as a sublattice of L
+FixedSublattice := function(L, g : k := 1);
+	eigenspace := LatticeWithBasis(BasisMatrix(ChangeRing(Eigenspace(g^k,1),Integers())));
+	return L meet eigenspace; //if L is a code lattice, then the resulting lattice will need to have inner product scaled by 1/2
+end function;
+
+//This function takes in a code lattice L,
+//the automorphism group AutLNat with NaturalAction := true, 
+//and an automorphism g of the code.
+//It returns the image of g, necessarily a permutation matrix, in the automorphism group of the lattice
+CodeToLatticeAut := function(L, AutLNat, g);
+	return AutLNat!gmatrix
+	where gmatrix := PermutationMatrix(BaseRing(AutLNat),g);
+end function;
+
+
+//This function takes in a cycle structure of a lattice automorphism.
+//For example, to represent 1^4 2^2, the user should input [<1,4>,<2,2>].
+//It returns the eta product associated to this cycle type as a q-series
+EtaProduct := function(sigma, q);
+	return &*[ DedekindEta(q^c[1])^c[2]: c in sigma ];
+end function;
+
+
+//This function takes in a lattice L and a lattice automorphism g.
+//It returns the cycle type of g.
+CycleType := function(L, g);
+	n := Order(g);
+	chi := CharacteristicPolynomial(g);
+	Cycle := CartesianProduct(Integers(), Integers());
+	sigma := [ Cycle!<d, Mu_d*V_dprime>:
+	  d in Divisors(dprime), dprime in Divisors(n)
+	  | V_dprime gt 0 and Mu_d ne 0
+	  where V_dprime := Valuation(chi, Phi_dprime)
+	  where Phi_dprime := CyclotomicPolynomial(dprime)
+	  where Mu_d := MoebiusMu(Integers()!(dprime/d))
+	];
+	sigma := Sort(sigma);
+	non_uniqueds:= [c[1]: c in sigma];
+	unique_ds := SetToIndexedSet(MultisetToSet(SequenceToMultiset(non_uniqueds)));
+	multiplicities := [Multiplicity(non_uniqueds, d): d in unique_ds];
+	indices := [Index(non_uniqueds, d): d in unique_ds];
+	newsigma := [Cycle!<unique_ds[i], bt >: i in [1..#unique_ds] | not(bt eq 0) where bt := (&+sigma[indices[i]..indices[i]+multiplicities[i]-1])[2]] ;
+	return(newsigma);
+end function;
+
+//This function takes in a lattice L and a lattice automorphism g.
+//It finds the fixed sublattice and its theta series as a q-series
+//and also computes the cycle type and corresponding eta product.
+//It outputs the quotient of the theta series with the eta product
+//it also outputs the coefficients as a list.
+EtaQuotient := function(L, g, q)
+	sigma := CycleType(L, g);
+	fix_g := ScaledLattice(FixedSublattice(L, g),1/2); //here we finally scale the lattice
+	if Rank(fix_g) gt 0 then
+		theta := ThetaSeriesModularForm(fix_g);
+	else
+		theta := 1;
+	end if;
+	eta := EtaProduct(sigma, q);
+	eta_quotient := (Parent(q)!theta)/eta;
+	coeffs := [Integers()!c: c in Coefficients(eta_quotient)|not c eq 0];
+	return eta_quotient, coeffs;
+end function;
+
+//This function determines the generalized cycle type of a subgroup of the automorphism group of the code. 
+OrbitType := function(codesubgrp);
+    orbits := Orbits(codesubgrp);
+    lengths := Sort([#o: o in orbits]);
+    mults := [Multiplicity(lengths,len): len in lengths]; 
+    inds := SetToSequence({Index(lengths, len): len in lengths});
+    sigma := [<lengths[i],mults[i]>: i in inds];
+    return sigma;
+end function;
+
+//This function is similar to the function above, but works for noncyclic subgroups.
+//Here codesubgrp must be a subgroup of the automorphism group of the code and not of the lattice
+EtaQuotientSubgroup := function(L, AutLNat, codesubgrp, q);
+	subgrpgens := Generators(codesubgrp);
+	if #codesubgrp eq 1 then 
+		subgrpgens := [Id(codesubgrp)];
+	end if;
+	imgs := [CodeToLatticeAut(L, AutLNat, g): g in subgrpgens];
+	fixedlat := ScaledLattice(&meet[FixedSublattice(L, g): g in imgs],1/2);
+	if Rank(fixedlat) gt 0 then
+		theta := ThetaSeriesModularForm(fixedlat);
+	else
+		theta := 1;
+	end if;
+        sigma := OrbitType(codesubgrp);
+	eta := EtaProduct(sigma,q);
+	eta_quotient := (Parent(q)!theta)/eta;
+	return eta_quotient;
+end function;
+
+
+//This function takes in subgrps which is a sequence of subgroups of the code,
+//The codelattice L, its automorphism group AutLNat (with NaturalAction:=true)
+//It prints out information about the fixed sublattice, its eta quotient,
+//and whether there is a lattice in the database which is isomorphic to the fixed sublattice.
+PrintLatticeData := function(subgrps, L, AutLNat, q: start:=1, stop:=#subgrps);
+    for i in [start..stop] do
+	grp := subgrps[i];
+	print grp, "";
+	grpgens := Generators(grp); //get the generators 
+	if #grp eq 1 then 
+		grpgens := [Id(grp)];
+	end if;
+        //find their images in the automorphism group of the codelattice
+	imgsgens := [CodeToLatticeAut(L, AutLNat,g): g in grpgens]; 
+        //get the fixed sublattice, but here it needs to be scaled
+	latfixedbygrp := ScaledLattice(&meet[FixedSublattice(L, gg): gg in imgsgens],1/2); 
+	print latfixedbygrp, "";
+
+	print "the eta quotient for the subgroup is:";
+	print EtaQuotientSubgroup(L, AutLNat, grp, q), "";
+
+	//find whether there's a lattice in the database isomorphic to the given fixed sublattice
+	dim := Dimension(latfixedbygrp);
+	D := LatticeDatabase();
+	print "isomorphic lattice(s) in the database are:";
+	foundone := false;
+	for i in [1..NumberOfLattices(D,dim)] do
+		if IsIsomorphic(latfixedbygrp, LatticeData(D,dim,i)`lattice) then
+			LatticeData(D,dim,i)`name;
+			foundone := true;
+		end if;
+	end for;
+	if foundone eq false then
+		print "none";
+	end if;
+	print "--------------";
+    end for;
+return "";
+end function;
+
+//VOA functions
+
+VOALiftHasOrderDoubling := function(latticeaut, CodeLat, N);
+    g:= latticeaut;
+    k := Order(g);
+    LC := CodeLat;
+    if k mod 2 eq 1 then
+    print "order of v is not even, no order doubling"; //user can comment this out.
+    return false;
+    end if;
+    orderdoubled := false;
+
+    L1 := FixedSublattice(LC, g^k);
+    R<[y]> := PolynomialRing(Integers(),Rank(L1));
+    
+    vecs := [];
+    for i in [1..Rank(L1)] do
+        Append(~vecs, [y[i]*ElementToSequence(L1.i)[j]: j in [1..N]]);
+    end for;
+    
+    v := [];
+    for i in [1..N] do
+        Append(~v, &+[vecs[j][i]: j in [1..#vecs]]);
+    end for;
+    
+    cols := [ElementToSequence(Transpose(g^(Integers()!(k/2)))[i]): i in [1..N]];
+    
+    actiononv := [];
+    for j in [1..N] do
+    Append(~actiononv, &+[Integers()!cols[j][i]*v[i]: i in [1..N]]);
+    end for;
+
+    outputs := [];
+    for i in [1..N] do
+        for j in [1..N] do
+            Append(~outputs, (1/2)*ChangeRing(v[i]*actiononv[j]*InnerProductMatrix(LC)[i][j],Rationals()));
+        end for;
+    end for;
+    
+    I := ideal<R|2>; 
+    
+    quotring, quotmap := R/I;
+    if not(quotmap(&+outputs) eq 0) then
+        orderdoubled := true;
+    end if;
+
+return orderdoubled;
+end function;
+
+
+// This function takes as input a lattice automorphism g and a power k
+// it first checks that both ord(g) and k are even, otherwise it gives an 
+// error since no order doubling occurs.
+// Then it computes the fixed sublattice L^{g^k} and its rank,
+// as well as the action of g^{k/2} on the vectors in this fixed sublattice.
+// It then computes the inner products <alpha, g^{k/2} alpha> and determines whether any are nonzero mod 2
+// If yes, it determines the kernel of the map w: L^{g^{k/2}} --> {+1, -1} 
+// as a sublattice of L^{g^k}
+KernelForOrderDoubling := function(latticeaut, CodeLat, k, N);
+    g:= latticeaut;
+    LC := CodeLat;
+    error if k mod 2 eq 1, "k is not even, no order doubling";
+    error if Order(g) mod 2 eq 1, "order of v is not even, no order doubling";
+    
+    L1 := FixedSublattice(LC,g^k);
+    R<[y]> := PolynomialRing(Integers(),Rank(L1));
+    
+    vecs := [];
+    for i in [1..Rank(L1)] do
+        Append(~vecs, [y[i]*ElementToSequence(L1.i)[j]: j in [1..N]]);
+    end for;
+    
+    v := [];
+    for i in [1..N] do
+        Append(~v, &+[vecs[j][i]: j in [1..#vecs]]);
+    end for;
+    
+    cols := [ElementToSequence(Transpose(g^(Integers()!(k/2)))[i]): i in [1..N]];
+    
+    actiononv := [];
+    for j in [1..N] do
+    Append(~actiononv, &+[Integers()!cols[j][i]*v[i]: i in [1..N]]);
+    end for;
+
+    outputs := [];
+    for i in [1..N] do
+        for j in [1..N] do
+            Append(~outputs, (1/2)*ChangeRing(v[i]*actiononv[j]*InnerProductMatrix(LC)[i][j],Rationals()));
+        end for;
+    end for;
+    
+    I := ideal<R|2>;
+    quotring, quotmap := R/I;
+
+    relation := &+outputs;
+    relevantindices := [];
+        for i in [1..Rank(L1)] do
+            mons := Monomials(quotmap(relation));
+            m := #mons;
+            if &+[Degree(R!Monomials(quotmap(relation))[j],y[i]): j in [1..m]] gt 0 then
+            Append(~relevantindices, i);
+            end if;
+        end for;
+    K<[Y]> := ChangeRing(R, GF(2));
+    S<[Z]> := PolynomialRing(GF(2), #relevantindices);
+
+    themap := [S|];
+    counter := 0;
+    for j in [1..Rank(L1)] do
+        if j in relevantindices then
+            Append(~themap, Z[counter+1]);
+        counter := counter + 1;
+        else Append(~themap, S!0);
+        end if;
+    end for;
+    mapofrings := hom<K->S|themap>;
+    reln := mapofrings(R!quotmap(relation));
+
+    pts := RationalPoints(Scheme(AffineSpace(S),reln));
+    pts := [ElementToSequence(pt): pt in pts];
+
+    spanningset := [L1|];
+    for i in relevantindices do
+        Append(~spanningset, 2*L1.i);
+    end for;
+
+    for i in [1..Rank(L1)] do
+        if not(i in relevantindices) then
+            Append(~spanningset, L1.i);
+        end if;
+    end for;
+        
+    for pt in pts do
+    Append(~spanningset, &+[(Integers()!pt[i]) * L1.relevantindices[i]: i in [1..#relevantindices]]);
+    end for;
+
+    kernel := sub<L1| spanningset>;
+    return L1, quotmap(relation), ScaledLattice(kernel,1/2);
+end function;
+
+
+
+VOAChar := function(groupOfCodeAuts, CodeLat, AutCode, AutLatNat, N);
+    grp := groupOfCodeAuts;
+    LC := CodeLat;
+    //print "group of automorphisms:", grp, ""; //can uncomment for printing the group
+    listOfElements := [AutCode!g: g in grp];
+    alreadyseen := {AutLatNat|};
+    imgsElts := [AutLatNat!PermutationMatrix(BaseRing(AutLatNat),g): g in listOfElements];
+    sEta := [Parent(q)|];
+
+    for g in imgsElts do
+        if not g in alreadyseen then
+            if VOALiftHasOrderDoubling(g,LC,N) then
+                for k in [1..2*Order(g)-1] do
+                    try
+                        a, b, kerk := KernelForOrderDoubling(g, LC, k, N);
+                        thetaserkerk := ThetaSeriesModularForm(kerk);
+                        cyclestructurek := CycleType(LC,g^k);
+                        etaprodk := EtaProduct(cyclestructurek,q);
+                        thetaserk:=ThetaSeriesModularForm(FixedSublattice(LC,g^k));
+                        etaquok, _:= (Parent(q)!(2*thetaserkerk-thetaserk))/etaprodk;
+                        Append(~sEta, etaquok);
+                    catch e
+                        etaquok,_:=EtaQuotient(LC,g^k, q);
+                        Append(~sEta, etaquok);
+                    end try;
+                    Include(~alreadyseen, g^k);
+                end for;
+            else
+                etaquo, _:=EtaQuotient(LC,g,q);
+                Include(~alreadyseen, g);
+                Append(~sEta, etaquo);  
+            end if;
+        end if;
+    end for;
+    sumEta := &+[sEta[i] : i in [1..#sEta]]/#sEta;
+    return sumEta;
+end function;
+
+
+//*************************************************************************
+//Main body for the particular choice of code C = Hamming code
+//You can replace C by another code from the DatabaseOfLinearCodes file
+//*************************************************************************
+
+C := LinearCode<GF(2),8| [1,0,0,0,0,1,1,1], [0,1,0,0,1,0,1,1], [0,0,1,0,1,1,0,1], [0,0,0,1,1,1,1,0]>; 
+AutC, N, map := AutCode(C); //create the automorphism group of C
+LC, AutLCNat, _<x> := CodeLattice(C); //create the code lattice and its automorphism group
+
+//Take conjugacy classes of elements of AutC and get their corresponding lattice automorphisms
+conjreps := [c[3]: c in ConjugacyClasses(AutC)]; 
+imgs := [CodeToLatticeAut(LC, AutLCNat, g): g in conjreps];
+
+cyctypes := [CycleType(LC, imgs[i]): i in [1..#imgs]]; //get their cycle types
+ParallelSort(~cyctypes, ~conjreps); //and sort both by the cycle types
+imgs := [CodeToLatticeAut(LC, AutLCNat, g): g in conjreps];
+PrintLatticeData( [sub<AutC|c>: c in conjreps], LC, AutLCNat,q); //print lattice data for the cyclic subgroups
+
+//WARNING: this will be time consuming for codes with large length
+//Uncomment at your own risk
+//Calculate all conjugacy classes of subgroups of AutC (except for the trivial subgroup)
+//subs := [GG`subgroup: GG in Subgroups(AutC) | GG`order gt 1];
+//PrintLatticeData(subs,LC, AutLCNat,q);
+
+
+//This code gives VOA characters of subgroups G of the automorphism group
+// of the code, lifted to the corresponding lattice VOA 
+//where the lattice is build via Construction A
+lbound := 1; ubound := 20;
+subs := [GG`subgroup: GG in Subgroups(AutC) | GG`order gt 1];
+for i in [lbound..ubound] do
+VOAChar(subs[i], LC, AutC, AutLCNat,N);
+print "*********************"; print "";
+end for;
+
+
